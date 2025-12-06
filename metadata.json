@@ -1,0 +1,5 @@
+{
+  "name": "DianaFashionTrader Pro",
+  "description": "A comprehensive inventory and sales management system for trouser traders. Tracks imports, exchange rates, pricing logic, daily sales ledgers, and customer relationships with AI-powered messaging.",
+  "requestFramePermissions": []
+}
