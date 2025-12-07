@@ -1,6 +1,11 @@
 import { supabase } from './supabaseClient';
 import { Product, Sale, Customer, User } from '../types';
 
+// Helpers to check if we are in "Cloud Mode"
+export const isCloudEnabled = () => {
+    return !!supabase;
+};
+
 // --- PRODUCTS ---
 export const fetchProducts = async (): Promise<Product[] | null> => {
     if (!supabase) return null;
@@ -13,6 +18,13 @@ export const saveProduct = async (product: Product) => {
     if (!supabase) return;
     const { error } = await supabase.from('products').upsert(product);
     if (error) console.error("Save Product Error:", error);
+};
+
+export const saveProducts = async (products: Product[]) => {
+    if (!supabase) return;
+    if (products.length === 0) return;
+    const { error } = await supabase.from('products').upsert(products);
+    if (error) console.error("Bulk Save Products Error:", error);
 };
 
 export const deleteProduct = async (id: string) => {
@@ -32,6 +44,13 @@ export const saveSale = async (sale: Sale) => {
     if (!supabase) return;
     const { error } = await supabase.from('sales').upsert(sale);
     if (error) console.error("Save Sale Error:", error);
+};
+
+export const saveSales = async (sales: Sale[]) => {
+    if (!supabase) return;
+    if (sales.length === 0) return;
+    const { error } = await supabase.from('sales').upsert(sales);
+    if (error) console.error("Bulk Save Sales Error:", error);
 };
 
 // --- CUSTOMERS ---

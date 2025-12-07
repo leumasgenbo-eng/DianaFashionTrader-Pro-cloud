@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { ViewState, Product, Sale, Customer, User, Role } from './types';
 import Dashboard from './components/Dashboard';
@@ -12,6 +11,7 @@ import OrderQueue from './components/OrderQueue';
 import DailySalesSummary from './components/DailySalesSummary';
 import Auth from './components/Auth';
 import { exportToExcel } from './services/excelService';
+import { isCloudEnabled, fetchProducts, fetchSales, fetchCustomers, fetchStaff, saveCustomer } from './services/dataService';
 import { LayoutDashboard, PackageSearch, Users, ShoppingCart, Download, Menu, X, LogOut, UserCircle, Banknote, Briefcase, ClipboardList, PieChart } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -24,7 +24,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<ViewState>('DASHBOARD');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Initialize Data State
+  // Initialize Data State (Local Cache first)
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('products');
     return saved ? JSON.parse(saved) : [];
@@ -50,7 +50,29 @@ const App: React.FC = () => {
     ];
   });
 
-  // Persistence Effects
+  // --- CLOUD SYNC ---
+  useEffect(() => {
+    const loadCloudData = async () => {
+      if (isCloudEnabled()) {
+        console.log("Connecting to Supabase...");
+        
+        const fetchedProducts = await fetchProducts();
+        if (fetchedProducts) setProducts(fetchedProducts);
+
+        const fetchedSales = await fetchSales();
+        if (fetchedSales) setSales(fetchedSales);
+
+        const fetchedCustomers = await fetchCustomers();
+        if (fetchedCustomers) setCustomers(fetchedCustomers);
+
+        const fetchedStaff = await fetchStaff();
+        if (fetchedStaff && fetchedStaff.length > 0) setStaffList(fetchedStaff);
+      }
+    };
+    loadCloudData();
+  }, []);
+
+  // Persistence Effects (Local Backup)
   useEffect(() => { localStorage.setItem('products', JSON.stringify(products)); }, [products]);
   useEffect(() => { localStorage.setItem('sales', JSON.stringify(sales)); }, [sales]);
   useEffect(() => { localStorage.setItem('customers', JSON.stringify(customers)); }, [customers]);
@@ -104,20 +126,30 @@ const App: React.FC = () => {
   };
 
   // Helper to update customer stats when a sale happens
-  const updateCustomerSpend = (customerId: string, amount: number, purchasedProducts: Product[]) => {
+  const updateCustomerSpend = async (customerId: string, amount: number, purchasedProducts: Product[]) => {
+    // 1. Update Local State
+    let updatedCustomer: Customer | null = null;
+    
     setCustomers(prev => prev.map(c => {
       if (c.id === customerId) {
         const newPreferences = new Set([...c.preferences]);
         purchasedProducts.forEach(p => newPreferences.add(`${p.type} ${p.size}`));
-        return {
+        
+        updatedCustomer = {
           ...c,
           totalSpent: c.totalSpent + amount,
           lastPurchaseDate: new Date().toISOString(),
           preferences: Array.from(newPreferences)
         };
+        return updatedCustomer;
       }
       return c;
     }));
+
+    // 2. Sync to Cloud
+    if (updatedCustomer) {
+        await saveCustomer(updatedCustomer);
+    }
   };
 
   // Define Navigation Items based on Role

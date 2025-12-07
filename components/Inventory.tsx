@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, ProductType, StockHistoryEntry } from '../types';
+import { saveProduct, saveProducts, deleteProduct } from '../services/dataService';
 import { Plus, Trash2, Edit2, Save, X, Check, AlertTriangle, Filter, PackagePlus, Calculator, Tag, ArrowRight, Layers, RefreshCw, Settings2, Search, SlidersHorizontal, AlertCircle, History, Clock, Package, DollarSign, ChevronRight } from 'lucide-react';
 
 interface InventoryProps {
@@ -157,11 +158,13 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     setSelectedIds(newSet);
   };
 
-  const handleBulkStockUpdate = () => {
+  const handleBulkStockUpdate = async () => {
     const val = parseFloat(bulkStockData.value);
     if (isNaN(val)) return;
 
     if (confirm(`Update stock for ${selectedIds.size} items?`)) {
+      const productsToUpdate: Product[] = [];
+
       setProducts(prev => prev.map(p => {
         if (selectedIds.has(p.id)) {
           let updated = { ...p };
@@ -174,7 +177,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
           const diff = finalStock - currentStock;
           if (diff !== 0) {
             updated.history = [...updated.history, {
-              id: crypto.randomUUID(),
+              id: crypto.randomUUID() as string,
               date: new Date().toISOString(),
               type: 'BULK_EDIT',
               quantityChange: diff,
@@ -183,17 +186,24 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
             }];
           }
           updated.stockQuantity = finalStock;
+          
+          // Collect for Cloud Save
+          productsToUpdate.push(updated);
           return updated;
         }
         return p;
       }));
+      
+      // Save to Cloud
+      await saveProducts(productsToUpdate);
+
       setBulkActionType(null);
       setBulkStockData({ value: '', mode: 'ADD', reason: '' });
       setSelectedIds(new Set());
     }
   };
 
-  const handleBulkPricingUpdate = () => {
+  const handleBulkPricingUpdate = async () => {
     const marginVal = bulkPricingData.margin ? parseFloat(bulkPricingData.margin) : null;
     const taxVal = bulkPricingData.tax ? parseFloat(bulkPricingData.tax) : null;
 
@@ -203,6 +213,8 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     }
 
     if (confirm(`Update pricing for ${selectedIds.size} items?`)) {
+      const productsToUpdate: Product[] = [];
+
       setProducts(prev => prev.map(p => {
         if (selectedIds.has(p.id)) {
           let updated = { ...p };
@@ -216,10 +228,15 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
           const taxAmount = pricePreTax * (updated.taxRate / 100);
           updated.sellingPrice = Math.ceil(pricePreTax + taxAmount);
           
+          productsToUpdate.push(updated);
           return updated;
         }
         return p;
       }));
+
+      // Save to Cloud
+      await saveProducts(productsToUpdate);
+
       setBulkActionType(null);
       setBulkPricingData({ margin: '', tax: '' });
       setSelectedIds(new Set());
@@ -230,8 +247,15 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     setShowDeleteConfirm(true);
   };
   
-  const confirmBulkDelete = () => {
+  const confirmBulkDelete = async () => {
+    const idsToDelete = Array.from(selectedIds);
     setProducts(prev => prev.filter(p => !selectedIds.has(p.id)));
+    
+    // Delete from Cloud
+    for (const id of idsToDelete) {
+        await deleteProduct(id);
+    }
+
     setSelectedIds(new Set());
     setShowDeleteConfirm(false);
   };
@@ -244,7 +268,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     const costCfa = parseFloat(formData.costCfa) || 0;
@@ -254,7 +278,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     const stockQuantity = parseInt(formData.stockQuantity) || 0;
 
     const newProduct: Product = {
-      id: crypto.randomUUID(),
+      id: crypto.randomUUID() as string,
       brand: formData.brand,
       type: formData.type as ProductType,
       color: formData.color,
@@ -271,7 +295,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
       stockQuantity,
       dateAdded: new Date().toISOString(),
       history: [{
-          id: crypto.randomUUID(),
+          id: crypto.randomUUID() as string,
           date: new Date().toISOString(),
           type: 'INITIAL',
           quantityChange: stockQuantity,
@@ -281,6 +305,9 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     };
     
     setProducts(prev => [newProduct, ...prev]);
+    
+    // Save to Cloud
+    await saveProduct(newProduct);
     
     setFormData(prev => ({ 
         ...prev, 
@@ -295,9 +322,12 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     alert("New stock added successfully!");
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if(confirm("Are you sure you want to delete this item?")) {
       setProducts(prev => prev.filter(p => p.id !== id));
+      // Delete from Cloud
+      await deleteProduct(id);
+
       const newSet = new Set(selectedIds);
       newSet.delete(id);
       setSelectedIds(newSet);
@@ -311,7 +341,9 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
     setEditReason('');
   };
 
-  const saveStockUpdate = (id: string) => {
+  const saveStockUpdate = async (id: string) => {
+    let updatedProduct: Product | null = null;
+
     setProducts(prev => prev.map(p => {
         if (p.id === id) {
             const oldStock = p.stockQuantity;
@@ -319,22 +351,30 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
             
             if (diff !== 0) {
                 const historyEntry: StockHistoryEntry = {
-                    id: crypto.randomUUID(),
+                    id: crypto.randomUUID() as string,
                     date: new Date().toISOString(),
                     type: 'MANUAL_EDIT',
                     quantityChange: diff,
                     newStockLevel: editStockQty,
                     note: editReason.trim() || 'Manual Correction'
                 };
-                return { 
+                
+                updatedProduct = { 
                     ...p, 
                     stockQuantity: editStockQty,
                     history: [...(p.history || []), historyEntry]
                 };
+                return updatedProduct;
             }
         }
         return p;
     }));
+
+    // Save to Cloud
+    if (updatedProduct) {
+        await saveProduct(updatedProduct);
+    }
+
     setEditingId(null);
     setEditReason('');
   };
@@ -401,7 +441,7 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts }) => {
                 </select>
                 <select 
                   value={filterStock} 
-                  onChange={(e) => setFilterStock(e.target.value as any)}
+                  onChange={(e) => setFilterStock(e.target.value as 'ALL' | 'LOW' | 'OUT' | 'IN')}
                   className="input-primary bg-white cursor-pointer py-2 text-sm"
                 >
                   <option value="ALL">Any Stock</option>

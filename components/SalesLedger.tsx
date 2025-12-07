@@ -1,6 +1,6 @@
-
 import React, { useState, useEffect } from 'react';
 import { Product, Sale, Customer, StockHistoryEntry, User } from '../types';
+import { saveSale, saveSales, saveProduct, saveProducts } from '../services/dataService';
 import { ShoppingCart, Calendar, RotateCcw, X, CheckCircle, TrendingUp, Percent, Award, Plus, Trash2, Receipt, Wallet, Settings, Download, Printer, Share2, Lock, ArrowRight, AlertCircle, Phone, Search, XCircle } from 'lucide-react';
 import { exportPerformanceData } from '../services/excelService';
 
@@ -140,7 +140,7 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
     setShowConfirmation(true);
   };
 
-  const confirmTransaction = () => {
+  const confirmTransaction = async () => {
     try {
         const transactionId = crypto.randomUUID();
         const shortId = transactionId.slice(0, 8).toUpperCase();
@@ -152,6 +152,7 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
 
         const newSales: Sale[] = [];
         const productsToUpdate = new Map<string, number>(); // productId -> qty sold
+        const updatedProductList: Product[] = [];
 
         // 1. Prepare Sales Records - INITIALLY PENDING
         cart.forEach(item => {
@@ -176,6 +177,9 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
 
         // 2. Update Sales State
         setSales(prev => [...newSales, ...prev]);
+        
+        // SAVE SALES TO CLOUD
+        await saveSales(newSales);
 
         // 3. Update Product Stock (Deduct immediately to reserve items)
         setProducts(prev => prev.map(p => {
@@ -193,14 +197,19 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
                 note: `Order ${shortId} (Pending Payment)`
             };
 
-            return { 
+            const updatedP = { 
                 ...p, 
                 stockQuantity: newStock,
                 history: [...(p.history || []), historyEntry]
             };
+            updatedProductList.push(updatedP);
+            return updatedP;
         }
         return p;
         }));
+        
+        // SAVE PRODUCTS TO CLOUD
+        await saveProducts(updatedProductList);
 
         // 4. Generate Receipt Data (Used as Payment Ticket)
         setLastReceipt({
@@ -250,30 +259,40 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
   };
 
   // --- Remote Payment Verification (Salesman confirms payment) ---
-  const verifyPayment = (transactionId: string) => {
+  const verifyPayment = async (transactionId: string) => {
       if(confirm(`Confirm that you have verified payment for Order #${transactionId}?`)) {
           const now = new Date().toISOString();
+          let updatedSale: Sale | null = null;
+
           setSales(prev => prev.map(s => {
               if (s.transactionId === transactionId) {
-                  return {
+                  updatedSale = {
                       ...s,
                       paymentStatus: 'PAID',
                       paymentMethod: 'MOMO', // Assumed if remote verification
                       paymentDate: now,
                       fulfillmentStatus: 'PROCESSING'
                   };
+                  return updatedSale;
               }
               return s;
           }));
+          
+          if (updatedSale) {
+              await saveSale(updatedSale);
+          }
+
           alert("Order marked as PAID. Moved to Order Queue.");
       }
   };
 
   // --- Cancel Pending Transaction (Restock) ---
-  const cancelPendingTransaction = (transactionId: string) => {
+  const cancelPendingTransaction = async (transactionId: string) => {
       if(!confirm("Are you sure you want to cancel this pending order? This will restore the stock.")) return;
 
       const salesToCancel = sales.filter(s => s.transactionId === transactionId);
+      const productsToSave: Product[] = [];
+      const salesToSave: Sale[] = [];
       
       // 1. Restore Stock
       const productsToRestore = new Map<string, number>();
@@ -296,7 +315,9 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
                   note: `Cancelled Order ${transactionId}`
               };
 
-              return { ...p, stockQuantity: newStock, history: [...(p.history || []), historyEntry] };
+              const updatedP = { ...p, stockQuantity: newStock, history: [...(p.history || []), historyEntry] };
+              productsToSave.push(updatedP);
+              return updatedP;
           }
           return p;
       }));
@@ -304,10 +325,16 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
       // 2. Mark Sales as Cancelled
       setSales(prev => prev.map(s => {
           if (s.transactionId === transactionId) {
-              return { ...s, paymentStatus: 'CANCELLED' };
+              const updatedS = { ...s, paymentStatus: 'CANCELLED' as const };
+              salesToSave.push(updatedS);
+              return updatedS;
           }
           return s;
       }));
+
+      // Save Changes to Cloud
+      await saveProducts(productsToSave);
+      await saveSales(salesToSave);
   };
 
   // --- Return Logic ---
@@ -316,7 +343,7 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
     setReturnQty(1);
   };
 
-  const handleReturnSubmit = () => {
+  const handleReturnSubmit = async () => {
     const saleToReturn = returnModal.sale;
     if (!saleToReturn) return;
 
@@ -354,12 +381,17 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
       fulfillmentStatus: 'COMPLETED'
     };
 
+    let updatedOriginalSale: Sale | null = null;
+    let updatedProduct: Product | null = null;
+
     setSales(prev => {
-      const updatedSales = prev.map(s => 
-        s.id === saleToReturn.id 
-          ? { ...s, returnedQuantity: (s.returnedQuantity || 0) + returnQty }
-          : s
-      );
+      const updatedSales = prev.map(s => {
+        if (s.id === saleToReturn.id) {
+            updatedOriginalSale = { ...s, returnedQuantity: (s.returnedQuantity || 0) + returnQty };
+            return updatedOriginalSale;
+        }
+        return s;
+      });
       return [refundTransaction, ...updatedSales];
     });
 
@@ -374,11 +406,12 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
                 newStockLevel: newStock,
                 note: `Return from ${saleToReturn.customerName}`
             };
-            return { 
+            updatedProduct = { 
                 ...p, 
                 stockQuantity: newStock,
                 history: [...(p.history || []), historyEntry]
             };
+            return updatedProduct;
         }
         return p;
     }));
@@ -386,6 +419,11 @@ const SalesLedger: React.FC<SalesLedgerProps> = ({ products, sales, setSales, cu
     if (saleToReturn.customerId && saleToReturn.paymentStatus === 'PAID') {
       updateCustomerSpend(saleToReturn.customerId, -refundAmount, []);
     }
+
+    // Save to Cloud
+    if (updatedOriginalSale) await saveSale(updatedOriginalSale);
+    await saveSale(refundTransaction);
+    if (updatedProduct) await saveProduct(updatedProduct);
 
     setReturnModal({ isOpen: false, sale: null });
   };
