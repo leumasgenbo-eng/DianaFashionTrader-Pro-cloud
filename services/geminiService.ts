@@ -2,7 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import { Product, Customer } from "../types";
 
 // Access API key via process.env.API_KEY
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateCustomerMessage = async (
   customer: Customer,
